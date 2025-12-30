@@ -1,0 +1,25 @@
+
+# DADOS / DATASETS
+
+Hotel_Reviews.csv
+*.csv
+*.tsv
+data/
+datasets/
+
+
+# AMBIENTES VIRTUAIS
+
+venv/
+.env
+.env.*
+
+
+# PYTHON
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
