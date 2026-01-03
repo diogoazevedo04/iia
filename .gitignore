@@ -2,6 +2,7 @@
 # DADOS / DATASETS
 
 Hotel_Reviews.csv
+Hotel_Reviews_processed.pkl
 *.csv
 *.tsv
 data/
