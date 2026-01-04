@@ -6,6 +6,7 @@ import numpy as np
 import ollama
 import json
 import pydeck as pdk
+import random
 
 st.set_page_config(
     page_title="Recomendações de Hotéis ", 
@@ -27,7 +28,7 @@ with st.sidebar:
     n_results = st.slider("Nº de Recomendações", 1, 5, 3)
 
 st.title("🏨 Recomendações de Hotéis Inteligente")
-st.markdown("Exemplo: *Quero um hotel barato em Londres perto do Big Ben*")
+st.markdown("Exemplo: *Quero um hotel barato em Londres perto do Big Ben para uma viagem de negócios*")
 
 # --- CARREGAMENTO DE DADOS ---
 @st.cache_resource
@@ -43,6 +44,18 @@ def carregar_dados():
         if 'Negative_Review' not in df.columns: df['Negative_Review'] = ""
         df['Negative_Review'] = df['Negative_Review'].fillna("")
         
+        # Garante que a coluna City existe
+        if 'City' not in df.columns:
+            df['City'] = df['Hotel_Address'].apply(lambda x: str(x).split()[-1])
+            
+        # --- CORREÇÃO: USAR Tags_Clean QUE É A QUE TU TENS ---
+        if 'Tags_Clean' not in df.columns: 
+            # Se por acaso não existir, cria vazia para não dar erro
+            df['Tags_Clean'] = ""
+        df['Tags_Clean'] = df['Tags_Clean'].fillna("")
+        
+        if 'Average_Score' not in df.columns: df['Average_Score'] = 0.0
+
         if len(df) > 3000:
             df = df.sample(n=3000, random_state=42).reset_index(drop=True)
             
@@ -57,20 +70,20 @@ if df is None:
     st.error("Erro: Ficheiro 'Hotel_Reviews_processed.csv' não encontrado.")
     st.stop()
 
+# --- LISTA DINÂMICA ---
+CIDADES_DISPONIVEIS = sorted(df['City'].dropna().unique().tolist())
+st.caption(f"Cidades detetadas no sistema: {', '.join(CIDADES_DISPONIVEIS)}")
+
 if 'embeddings' not in st.session_state:
     with st.spinner('A calcular vetores matemáticos para os hotéis...'):
         st.session_state['embeddings'] = modelo.encode(df['review'].tolist())
 
-# --- EXTRAÇÃO DE ENTIDADES (ATUALIZADO PARA POI) ---
+# --- EXTRAÇÃO DE ENTIDADES (COM TRIP TYPE) ---
 def analisar_pedido_ia(query_utilizador):
     """
     Tenta usar o Ollama. Se falhar, usa regras manuais.
-    Agora extrai também 'poi' (Pontos de Interesse).
     """
-    
-    # 1. TENTATIVA COM IA
     try:
-        # --- MUDANÇA AQUI: Adicionei o ponto 3 no Prompt ---
         prompt = f"""
         Analyze this hotel request: "{query_utilizador}"
         
@@ -78,12 +91,14 @@ def analisar_pedido_ia(query_utilizador):
         1. Identify the City (Translate to English, e.g., 'Londres'->'London').
         2. Identify technical features/amenities (Translate to English keywords).
         3. Identify specific Point of Interest/Landmark (e.g., 'Eiffel Tower', 'Hyde Park', 'Metro', 'City Center').
+        4. Identify Trip Type (Is it 'Business', 'Family', 'Couple', 'Solo' or 'Leisure'?).
         
         Output ONLY valid JSON format:
         {{
             "city": "CityName or null",
             "features": ["feature1", "feature2"],
-            "poi": "PointOfInterestName or null"
+            "poi": "PointOfInterestName or null",
+            "trip_type": "Business/Family/Couple/Solo or null"
         }}
         """
         
@@ -96,7 +111,6 @@ def analisar_pedido_ia(query_utilizador):
         
         dados = json.loads(json_str)
         
-        # Retorna se tiver alguma informação útil
         if dados.get("city") or dados.get("features") or dados.get("poi"):
             return dados
 
@@ -111,26 +125,21 @@ def analisar_pedido_ia(query_utilizador):
     if "pequeno" in query_lower: features_fallback.append("breakfast")
     if "ginásio" in query_lower: features_fallback.append("gym")
     if "wifi" in query_lower: features_fallback.append("wifi")
-    
-    # Adicionamos "metro" como feature manual
-    if "metro" in query_lower or "transporte" in query_lower: 
-        features_fallback.append("metro")
+    if "metro" in query_lower or "transporte" in query_lower: features_fallback.append("metro")
     
     cidade_fallback = None
-    if "londres" in query_lower or "london" in query_lower: cidade_fallback = "London"
-    elif "paris" in query_lower: cidade_fallback = "Paris"
-    elif "amesterdão" in query_lower or "amsterdam" in query_lower: cidade_fallback = "Amsterdam"
-    elif "milão" in query_lower or "milan" in query_lower: cidade_fallback = "Milan"
-    elif "viena" in query_lower or "vienna" in query_lower: cidade_fallback = "Vienna"
-    elif "barcelona" in query_lower: cidade_fallback = "Barcelona"
-    
-    return {"city": cidade_fallback, "features": features_fallback, "poi": None}
+    for cidade in CIDADES_DISPONIVEIS:
+        if cidade.lower() in query_lower:
+            cidade_fallback = cidade
+            break
+            
+    return {"city": cidade_fallback, "features": features_fallback, "poi": None, "trip_type": None}
 
 def destacar_texto(texto, termos):
     texto_lower = str(texto).lower()
     for t in termos:
-        if t and len(t) > 2: # Evita erros com termos vazios
-            idx = texto_lower.find(t.lower()) # Garante que procura em minúsculas
+        if t and len(t) > 2:
+            idx = texto_lower.find(t.lower())
             if idx != -1:
                 return f"...{texto[max(0, idx-50):min(len(texto), idx+300)]}..."
     return texto[:300] + "..."
@@ -147,47 +156,95 @@ if botao and pergunta:
         
         cidade_ia = entidades.get("city")
         features_ia = entidades.get("features", [])
-        poi_ia = entidades.get("poi") # <--- LER O PONTO DE INTERESSE
+        poi_ia = entidades.get("poi")
+        tipo_viagem = entidades.get("trip_type") 
+        
+        # --- VALIDAÇÃO VISUAL DA CIDADE ---
+        if cidade_ia and cidade_ia != "null":
+            cidade_encontrada = False
+            for c in CIDADES_DISPONIVEIS:
+                if cidade_ia.lower() in c.lower():
+                    cidade_ia = c 
+                    cidade_encontrada = True
+                    break
+            
+            if not cidade_encontrada:
+                st.warning(f"Não encontrámos hotéis em **{cidade_ia}**.")
+                st.markdown("### ✈️ No entanto, temos estes destinos fantásticos:")
+                
+                IMAGENS_CIDADES = {
+                    "Amsterdam": "https://images.unsplash.com/photo-1534351590666-13e3e96b5017?w=600&q=80",
+                    "Barcelona": "https://images.unsplash.com/photo-1583422409516-2895a77efded?w=600&q=80",
+                    "London": "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=600&q=80",
+                    "Milan": "https://media.istockphoto.com/id/493223692/photo/milan-cathedral-italy.jpg?s=612x612&w=0&k=20&c=35HLzOeor-vAWdcv5SvpBcnRECAmpzjeqh28uUzk-to=",
+                    "Paris": "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=600&q=80",
+                    "Vienna": "https://media.istockphoto.com/id/519836276/photo/vienna-sunrise.jpg?s=612x612&w=0&k=20&c=HRnz-vIh2IVG9XkDF4v3FRk_5eiO0oKEFLlK4O4G2tU="
+                }
+
+                sugestoes = random.sample(CIDADES_DISPONIVEIS, min(4, len(CIDADES_DISPONIVEIS)))
+                cols = st.columns(4)
+                for idx, cidade_sug in enumerate(sugestoes):
+                    with cols[idx]:
+                        img_url = IMAGENS_CIDADES.get(cidade_sug, "https://placehold.co/600x400")
+                        st.image(img_url, use_container_width=True)
+                        st.subheader(cidade_sug)
+                st.stop()
         
         if check_pool: features_ia.append("pool")
         if check_wifi: features_ia.append("wifi")
         if check_gym: features_ia.append("gym")
         if check_breakfast: features_ia.append("breakfast")
-        
-        # Se detetou um POI, adiciona à lista de destaques para aparecer a bold
-        if poi_ia and poi_ia != "null":
-            features_ia.append(poi_ia)
+        if poi_ia and poi_ia != "null": features_ia.append(poi_ia)
 
         col1, col2 = st.columns(2)
         with col1:
-            if cidade_ia and cidade_ia != "null":
-                st.info(f"📍 Cidade: **{cidade_ia}**")
-            else:
-                st.caption("🌍 Cidade: Qualquer")
-                
-            # --- MOSTRAR O POI NA INTERFACE ---
-            if poi_ia and poi_ia != "null":
-                st.info(f"🎯 Ponto de Interesse: **{poi_ia}**")
-            # ----------------------------------
+            if cidade_ia and cidade_ia != "null": st.info(f"📍 Cidade: **{cidade_ia}**")
+            else: st.caption("🌍 Cidade: Qualquer")
+            
+            if poi_ia and poi_ia != "null": st.info(f"🎯 Ponto de Interesse: **{poi_ia}**")
 
         with col2:
+            if tipo_viagem and tipo_viagem != "null": st.success(f"✈️ Viagem: **{tipo_viagem}**")
             st.success(f"🏷️ Conceitos: {', '.join([f for f in features_ia if f != poi_ia])}")
 
     with st.spinner('🔍 A cruzar dados...'):
         
-        vetor = modelo.encode([pergunta])
+        # 1. MELHORIA: POI no texto
+        texto_pesquisa = pergunta
+        if poi_ia and poi_ia != "null":
+            texto_pesquisa += f" near {poi_ia} close to {poi_ia}"
+            
+        vetor = modelo.encode([texto_pesquisa])
         scores = cosine_similarity(vetor, st.session_state['embeddings'])[0]
         
         df_temp = df.copy()
         df_temp['score'] = scores
         
+        # 2. FILTRO CIDADE
         if cidade_ia and cidade_ia != "null":
-            df_temp = df_temp[df_temp['Hotel_Address'].str.contains(cidade_ia, case=False, na=False)]
+            if 'City' in df_temp.columns:
+                df_temp = df_temp[df_temp['City'] == cidade_ia]
+            else:
+                df_temp = df_temp[df_temp['Hotel_Address'].str.contains(cidade_ia, case=False, na=False)]
         
-        for feat in features_ia:
-            # Não filtramos negativamente pelo POI para não eliminar hotéis bons que apenas não o mencionam na review negativa
-            if feat == poi_ia: continue 
+        # 3. BOOST POR TIPO DE VIAGEM (USANDO Tags_Clean)
+        if tipo_viagem and tipo_viagem != "null":
+            tipo_lower = tipo_viagem.lower()
+            termos_boost = []
             
+            if "business" in tipo_lower: termos_boost = ["Business", "Solo", "Desk"]
+            elif "family" in tipo_lower: termos_boost = ["Family", "Child", "Kids"]
+            elif "couple" in tipo_lower: termos_boost = ["Couple", "Romantic"]
+            elif "solo" in tipo_lower: termos_boost = ["Solo", "Single"]
+            
+            if termos_boost:
+                # CORREÇÃO: Procura na coluna 'Tags_Clean'
+                mask = df_temp['Tags_Clean'].str.contains('|'.join(termos_boost), case=False, na=False)
+                df_temp.loc[mask, 'score'] += 0.1
+
+        # 4. FILTROS NEGATIVOS
+        for feat in features_ia:
+            if feat == poi_ia: continue 
             if feat in ["quiet", "calm"]:
                 df_temp = df_temp[~df_temp['Negative_Review'].str.contains("noise|loud", case=False)]
             else:
@@ -196,18 +253,15 @@ if botao and pergunta:
         top = df_temp.sort_values(by='score', ascending=False).head(n_results)
 
         if top.empty:
-            st.warning(f"Não encontrámos hotéis compatíveis em **{cidade_ia}**.")
+            st.warning(f"Não encontrámos hotéis compatíveis.")
         else:
             
-            # --- MAPA GERAL INTERATIVO (PyDeck - Corrigido) ---
-            st.subheader("🗺️ Localização dos Hotéis")
-            
+            st.subheader("🗺️ Localização")
             df_mapa = top[['lat', 'lng', 'Hotel_Name', 'score']].copy()
             df_mapa = df_mapa.dropna()
             
             if not df_mapa.empty:
                 midpoint = (np.average(df_mapa["lat"]), np.average(df_mapa["lng"]))
-                
                 layer = pdk.Layer(
                     "ScatterplotLayer",
                     data=df_mapa,
@@ -232,23 +286,23 @@ if botao and pergunta:
                 ))
             else:
                 st.caption("Coordenadas indisponíveis para visualizar o mapa.")
-            # ------------------------------------------------
 
             st.divider()
             st.subheader("O Conselho da IA")
             
             contexto_hoteis = ""
             for _, row in top.iterrows():
-                contexto_hoteis += f"\n- {row['Hotel_Name']} ({row['Hotel_Address']}): {row['review'][:400]}..."
+                # Passamos Tags_Clean para o LLM saber se é bom para negócios/família
+                contexto_hoteis += f"\n- {row['Hotel_Name']} (Tags: {str(row['Tags_Clean'])[:50]}...): {row['review'][:400]}..."
             
-            # Atualizei o prompt para mencionar o POI se existir
             msg_poi = f"O utilizador quer ficar perto de {poi_ia}." if poi_ia else ""
+            msg_trip = f"É uma viagem de tipo {tipo_viagem}." if tipo_viagem else ""
             
             prompt_rag = f"""
             Com base nestes hotéis:
             {contexto_hoteis}
             
-            Responde ao pedido do utilizador: "{pergunta}". {msg_poi}
+            Responde ao pedido do utilizador: "{pergunta}". {msg_poi} {msg_trip}
             Recomenda o melhor e explica porquê em Português de Portugal.
             """
             
@@ -268,6 +322,6 @@ if botao and pergunta:
             for _, row in top.iterrows():
                 with st.expander(f"🏨 {row['Hotel_Name']} ({row['score']:.0%})", expanded=True):
                     st.caption(f"📍 {row['Hotel_Address']}")
-                    # Passamos a lista features_ia (que agora inclui o POI) para destacar no texto
+                    if tipo_viagem: st.caption(f"🏷️ Tags: {str(row['Tags_Clean'])[:100]}...")
                     st.markdown(f"> {destacar_texto(row['review'], features_ia)}")
                     st.metric("Score", f"{row['score']:.2f}")
