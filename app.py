@@ -176,7 +176,7 @@ if botao and pergunta:
                     "Amsterdam": "https://images.unsplash.com/photo-1534351590666-13e3e96b5017?w=600&q=80",
                     "Barcelona": "https://images.unsplash.com/photo-1583422409516-2895a77efded?w=600&q=80",
                     "London": "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?w=600&q=80",
-                    "Milan": "https://media.istockphoto.com/id/493223692/photo/milan-cathedral-italy.jpg?s=612x612&w=0&k=20&c=35HLzOeor-vAWdcv5SvpBcnRECAmpzjeqh28uUzk-to=",
+                    "Milan": "https://images.unsplash.com/photo-1572602648934-1d98de6dab48?q=80&w=2670&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
                     "Paris": "https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=600&q=80",
                     "Vienna": "https://media.istockphoto.com/id/519836276/photo/vienna-sunrise.jpg?s=612x612&w=0&k=20&c=HRnz-vIh2IVG9XkDF4v3FRk_5eiO0oKEFLlK4O4G2tU="
                 }
