@@ -48,7 +48,7 @@ def carregar_dados():
         if 'City' not in df.columns:
             df['City'] = df['Hotel_Address'].apply(lambda x: str(x).split()[-1])
             
-        # --- CORREÇÃO: USAR Tags_Clean QUE É A QUE TU TENS ---
+        # USAR Tags_Clean
         if 'Tags_Clean' not in df.columns: 
             # Se por acaso não existir, cria vazia para não dar erro
             df['Tags_Clean'] = ""
@@ -209,7 +209,7 @@ if botao and pergunta:
 
     with st.spinner('🔍 A cruzar dados...'):
         
-        # 1. MELHORIA: POI no texto
+        # 1. POI no texto
         texto_pesquisa = pergunta
         if poi_ia and poi_ia != "null":
             texto_pesquisa += f" near {poi_ia} close to {poi_ia}"
@@ -238,7 +238,7 @@ if botao and pergunta:
             elif "solo" in tipo_lower: termos_boost = ["Solo", "Single"]
             
             if termos_boost:
-                # CORREÇÃO: Procura na coluna 'Tags_Clean'
+                # Procura na coluna 'Tags_Clean'
                 mask = df_temp['Tags_Clean'].str.contains('|'.join(termos_boost), case=False, na=False)
                 df_temp.loc[mask, 'score'] += 0.1
 
