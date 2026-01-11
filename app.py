@@ -30,7 +30,7 @@ with st.sidebar:
 st.title("🏨 Recomendações de Hotéis Inteligente")
 st.markdown("Exemplo: *Quero um hotel barato em Londres perto do Big Ben para uma viagem de negócios*")
 
-# --- CARREGAMENTO DE DADOS ---
+
 @st.cache_resource
 def carregar_modelo():
     return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
@@ -48,9 +48,7 @@ def carregar_dados():
         if 'City' not in df.columns:
             df['City'] = df['Hotel_Address'].apply(lambda x: str(x).split()[-1])
             
-        # USAR Tags_Clean
         if 'Tags_Clean' not in df.columns: 
-            # Se por acaso não existir, cria vazia para não dar erro
             df['Tags_Clean'] = ""
         df['Tags_Clean'] = df['Tags_Clean'].fillna("")
         
@@ -80,9 +78,6 @@ if 'embeddings' not in st.session_state:
 
 # --- EXTRAÇÃO DE ENTIDADES (COM TRIP TYPE) ---
 def analisar_pedido_ia(query_utilizador):
-    """
-    Tenta usar o Ollama. Se falhar, usa regras manuais.
-    """
     try:
         prompt = f"""
         Analyze this hotel request: "{query_utilizador}"
@@ -117,7 +112,6 @@ def analisar_pedido_ia(query_utilizador):
     except Exception:
         pass
 
-    # 2. PLANO B (FALLBACK MANUAL)
     query_lower = query_utilizador.lower()
     
     features_fallback = []
@@ -144,8 +138,8 @@ def destacar_texto(texto, termos):
                 return f"...{texto[max(0, idx-50):min(len(texto), idx+300)]}..."
     return texto[:300] + "..."
 
-# --- INTERFACE E LÓGICA ---
 
+#Interface
 pergunta = st.text_input("O que procuras?")
 botao = st.button("Pesquisar", type="primary")
 
@@ -159,7 +153,6 @@ if botao and pergunta:
         poi_ia = entidades.get("poi")
         tipo_viagem = entidades.get("trip_type") 
         
-        # --- VALIDAÇÃO VISUAL DA CIDADE ---
         if cidade_ia and cidade_ia != "null":
             cidade_encontrada = False
             for c in CIDADES_DISPONIVEIS:
@@ -209,7 +202,6 @@ if botao and pergunta:
 
     with st.spinner('🔍 A cruzar dados...'):
         
-        # 1. POI no texto
         texto_pesquisa = pergunta
         if poi_ia and poi_ia != "null":
             texto_pesquisa += f" near {poi_ia} close to {poi_ia}"
@@ -220,14 +212,12 @@ if botao and pergunta:
         df_temp = df.copy()
         df_temp['score'] = scores
         
-        # 2. FILTRO CIDADE
         if cidade_ia and cidade_ia != "null":
             if 'City' in df_temp.columns:
                 df_temp = df_temp[df_temp['City'] == cidade_ia]
             else:
                 df_temp = df_temp[df_temp['Hotel_Address'].str.contains(cidade_ia, case=False, na=False)]
         
-        # 3. BOOST POR TIPO DE VIAGEM (USANDO Tags_Clean)
         if tipo_viagem and tipo_viagem != "null":
             tipo_lower = tipo_viagem.lower()
             termos_boost = []
@@ -238,11 +228,9 @@ if botao and pergunta:
             elif "solo" in tipo_lower: termos_boost = ["Solo", "Single"]
             
             if termos_boost:
-                # Procura na coluna 'Tags_Clean'
                 mask = df_temp['Tags_Clean'].str.contains('|'.join(termos_boost), case=False, na=False)
                 df_temp.loc[mask, 'score'] += 0.1
 
-        # 4. FILTROS NEGATIVOS
         for feat in features_ia:
             if feat == poi_ia: continue 
             if feat in ["quiet", "calm"]:
@@ -292,7 +280,6 @@ if botao and pergunta:
             
             contexto_hoteis = ""
             for _, row in top.iterrows():
-                # Passamos Tags_Clean para o LLM saber se é bom para negócios/família
                 contexto_hoteis += f"\n- {row['Hotel_Name']} (Tags: {str(row['Tags_Clean'])[:50]}...): {row['review'][:400]}..."
             
             msg_poi = f"O utilizador quer ficar perto de {poi_ia}." if poi_ia else ""
