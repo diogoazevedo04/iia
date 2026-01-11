@@ -38,28 +38,37 @@ def carregar_modelo():
 @st.cache_data
 def carregar_dados():
     try:
-        df = pd.read_csv("Hotel_Reviews_processed.csv")
-        
-        df['review'] = df['review'].fillna("Sem comentário.")
-        if 'Negative_Review' not in df.columns: df['Negative_Review'] = ""
-        df['Negative_Review'] = df['Negative_Review'].fillna("")
-        
-        # Garante que a coluna City existe
-        if 'City' not in df.columns:
-            df['City'] = df['Hotel_Address'].apply(lambda x: str(x).split()[-1])
-            
-        if 'Tags_Clean' not in df.columns: 
-            df['Tags_Clean'] = ""
-        df['Tags_Clean'] = df['Tags_Clean'].fillna("")
-        
-        if 'Average_Score' not in df.columns: df['Average_Score'] = 0.0
-
-        if len(df) > 3000:
-            df = df.sample(n=3000, random_state=42).reset_index(drop=True)
-            
-        return df
+        # Tenta carregar o PKL primeiro (Código do teu colega)
+        df = pd.read_pickle("Hotel_Reviews_processed.pkl")
     except FileNotFoundError:
-        return None
+        try:
+            # Se falhar, carrega o CSV (Teu código antigo)
+            df = pd.read_csv("Hotel_Reviews_processed.csv")
+        except FileNotFoundError:
+            return None
+    
+    # --- LIMPEZAS DE SEGURANÇA (Do teu código original) ---
+    df['review'] = df['review'].fillna("Sem comentário.")
+    
+    if 'Negative_Review' not in df.columns: 
+        df['Negative_Review'] = ""
+    df['Negative_Review'] = df['Negative_Review'].fillna("")
+    
+    # Garante que a coluna City existe
+    if 'City' not in df.columns:
+        df['City'] = df['Hotel_Address'].apply(lambda x: str(x).split()[-1])
+        
+    if 'Tags_Clean' not in df.columns: 
+        df['Tags_Clean'] = ""
+    df['Tags_Clean'] = df['Tags_Clean'].fillna("")
+    
+    if 'Average_Score' not in df.columns: df['Average_Score'] = 0.0
+
+    # Se vier do CSV e for muito grande, fazemos sample. Se vier do PKL, já está pronto.
+    if 'embeddings' not in df.columns and len(df) > 3000:
+        df = df.sample(n=3000, random_state=42).reset_index(drop=True)
+            
+    return df
 
 df = carregar_dados()
 modelo = carregar_modelo()
@@ -73,8 +82,12 @@ CIDADES_DISPONIVEIS = sorted(df['City'].dropna().unique().tolist())
 st.caption(f"Cidades detetadas no sistema: {', '.join(CIDADES_DISPONIVEIS)}")
 
 if 'embeddings' not in st.session_state:
-    with st.spinner('A calcular vetores matemáticos para os hotéis...'):
-        st.session_state['embeddings'] = modelo.encode(df['review'].tolist())
+    if 'embeddings' in df.columns:
+        st.success(f"Carregados {len(df)} hotéis com memória pré-calculada!")
+        st.session_state['embeddings'] = np.array(df['embeddings'].tolist())
+    else:
+        with st.spinner('A calcular vetores matemáticos para os hotéis...'):
+            st.session_state['embeddings'] = modelo.encode(df['review'].tolist())
 
 # --- EXTRAÇÃO DE ENTIDADES (COM TRIP TYPE) ---
 def analisar_pedido_ia(query_utilizador):
@@ -202,7 +215,19 @@ if botao and pergunta:
 
     with st.spinner('🔍 A cruzar dados...'):
         
+
         texto_pesquisa = pergunta
+        
+
+        termos_extra = []
+        if check_pool: termos_extra.append("swimming pool")
+        if check_wifi: termos_extra.append("wifi internet")
+        if check_breakfast: termos_extra.append("breakfast included morning food")
+        if check_gym: termos_extra.append("fitness gym")
+        
+        if termos_extra:
+            texto_pesquisa += " " + " ".join(termos_extra)
+
         if poi_ia and poi_ia != "null":
             texto_pesquisa += f" near {poi_ia} close to {poi_ia}"
             
@@ -211,104 +236,134 @@ if botao and pergunta:
         
         df_temp = df.copy()
         df_temp['score'] = scores
-        
+
         if cidade_ia and cidade_ia != "null":
-            if 'City' in df_temp.columns:
-                df_temp = df_temp[df_temp['City'] == cidade_ia]
+            match_cidade = df_temp[df_temp['City'].str.lower() == cidade_ia.lower()]
+            if not match_cidade.empty:
+                df_temp = match_cidade
             else:
                 df_temp = df_temp[df_temp['Hotel_Address'].str.contains(cidade_ia, case=False, na=False)]
-        
-        if tipo_viagem and tipo_viagem != "null":
-            tipo_lower = tipo_viagem.lower()
-            termos_boost = []
-            
-            if "business" in tipo_lower: termos_boost = ["Business", "Solo", "Desk"]
-            elif "family" in tipo_lower: termos_boost = ["Family", "Child", "Kids"]
-            elif "couple" in tipo_lower: termos_boost = ["Couple", "Romantic"]
-            elif "solo" in tipo_lower: termos_boost = ["Solo", "Single"]
-            
-            if termos_boost:
-                mask = df_temp['Tags_Clean'].str.contains('|'.join(termos_boost), case=False, na=False)
-                df_temp.loc[mask, 'score'] += 0.1
 
-        for feat in features_ia:
-            if feat == poi_ia: continue 
-            if feat in ["quiet", "calm"]:
-                df_temp = df_temp[~df_temp['Negative_Review'].str.contains("noise|loud", case=False)]
-            else:
-                df_temp = df_temp[~df_temp['Negative_Review'].str.contains(feat, case=False)]
+        filtros_ativos_nomes = []
+        
+        if check_pool:
+            mask_pool = (df_temp['Positive_Review'].str.contains('pool|swimming', case=False, na=False)) | \
+                        (df_temp['Tags_Clean'].str.contains('pool|swimming', case=False, na=False))
+            df_temp = df_temp[mask_pool]
+            filtros_ativos_nomes.append("Piscina")
+            
+        if check_wifi:
+            mask_wifi = (df_temp['Positive_Review'].str.contains('wifi|wi-fi|internet', case=False, na=False)) | \
+                        (df_temp['Tags_Clean'].str.contains('wifi|wi-fi|internet', case=False, na=False))
+            df_temp = df_temp[mask_wifi]
+            filtros_ativos_nomes.append("Wi-Fi")
+            
+        if check_breakfast:
+            mask_bf = (df_temp['Positive_Review'].str.contains('breakfast|buffet|morning|eggs', case=False, na=False)) | \
+                      (df_temp['Tags_Clean'].str.contains('breakfast', case=False, na=False))
+            df_temp = df_temp[mask_bf]
+            filtros_ativos_nomes.append("Pequeno Almoço")
+            
+        if check_gym:
+            mask_gym = (df_temp['Positive_Review'].str.contains('gym|fitness|workout', case=False, na=False)) | \
+                       (df_temp['Tags_Clean'].str.contains('gym|fitness', case=False, na=False))
+            df_temp = df_temp[mask_gym]
+            filtros_ativos_nomes.append("Ginásio")
+
+        if df_temp.empty:
+            st.warning(f"⚠️ Não encontrámos resultados em **{cidade_ia}** com esses filtros específicos.")
+            st.info("A mostrar resultados baseados apenas na pesquisa de texto e cidade.")
+     
+            df_temp = df.copy()
+            df_temp['score'] = scores
+            if cidade_ia:
+                 df_temp = df_temp[df_temp['City'].str.lower() == cidade_ia.lower()]
         
         top = df_temp.sort_values(by='score', ascending=False).head(n_results)
 
-        if top.empty:
-            st.warning(f"Não encontrámos hotéis compatíveis.")
-        else:
-            
-            st.subheader("🗺️ Localização")
-            df_mapa = top[['lat', 'lng', 'Hotel_Name', 'score']].copy()
-            df_mapa = df_mapa.dropna()
-            
-            if not df_mapa.empty:
-                midpoint = (np.average(df_mapa["lat"]), np.average(df_mapa["lng"]))
-                layer = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=df_mapa,
-                    get_position='[lng, lat]',
-                    get_color='[200, 30, 0, 160]',
-                    get_radius=200,
-                    pickable=True,
-                )
-                
-                view_state = pdk.ViewState(
-                    latitude=midpoint[0],
-                    longitude=midpoint[1],
-                    zoom=11,
-                    pitch=0,
-                )
-                
-                st.pydeck_chart(pdk.Deck(
-                    map_style=None,
-                    initial_view_state=view_state,
-                    layers=[layer],
-                    tooltip={"text": "{Hotel_Name}\nScore: {score}"}
-                ))
-            else:
-                st.caption("Coordenadas indisponíveis para visualizar o mapa.")
+       
+        st.subheader("🗺️ Localização")
+        df_mapa = top[['lat', 'lng', 'Hotel_Name', 'score']].dropna()
+        
+        if not df_mapa.empty:
+            midpoint = (np.average(df_mapa["lat"]), np.average(df_mapa["lng"]))
+            st.pydeck_chart(pdk.Deck(
+                map_style=None,
+                initial_view_state=pdk.ViewState(latitude=midpoint[0], longitude=midpoint[1], zoom=11),
+                layers=[pdk.Layer(
+                    "ScatterplotLayer", data=df_mapa, get_position='[lng, lat]',
+                    get_color='[200, 30, 0, 160]', get_radius=200, pickable=True
+                )],
+                tooltip={"text": "{Hotel_Name}\nScore: {score}"}
+            ))
 
-            st.divider()
-            st.subheader("O Conselho da IA")
-            
-            contexto_hoteis = ""
-            for _, row in top.iterrows():
-                contexto_hoteis += f"\n- {row['Hotel_Name']} (Tags: {str(row['Tags_Clean'])[:50]}...): {row['review'][:400]}..."
-            
-            msg_poi = f"O utilizador quer ficar perto de {poi_ia}." if poi_ia else ""
-            msg_trip = f"É uma viagem de tipo {tipo_viagem}." if tipo_viagem else ""
-            
-            prompt_rag = f"""
-            Com base nestes hotéis:
-            {contexto_hoteis}
-            
-            Responde ao pedido do utilizador: "{pergunta}". {msg_poi} {msg_trip}
-            Recomenda o melhor e explica porquê em Português de Portugal.
-            """
-            
-            res_box = st.empty()
-            full_res = ""
-            
-            try:
-                stream = ollama.chat(model='mistral', messages=[{'role': 'user', 'content': prompt_rag}], stream=True)
-                for chunk in stream:
-                    full_res += chunk['message']['content']
-                    res_box.info(full_res + "▌")
-                res_box.success(full_res)
-            except Exception:
-                res_box.warning("O Consultor IA está ocupado, mas aqui estão os melhores resultados encontrados:")
+        st.divider()
+        st.subheader("O Conselho da IA")
+        
+       
+        contexto_hoteis = ""
+        for _, row in top.iterrows():
+            review_text = str(row['review'])[:600].replace("\n", " ")
+            tags = str(row['Tags_Clean'])[:100]
+            contexto_hoteis += f"\n🏨 HOTEL: {row['Hotel_Name']}\n   - Score: {row['score']:.2f}\n   - Tags: {tags}\n   - O que dizem: {review_text}\n"
 
-            st.divider()
-            for _, row in top.iterrows():
-                with st.expander(f"🏨 {row['Hotel_Name']} ({row['score']:.0%})", expanded=True):
-                    st.caption(f"📍 {row['Hotel_Address']}")
-                    if tipo_viagem: st.caption(f"🏷️ Tags: {str(row['Tags_Clean'])[:100]}...")
-                    st.markdown(f"> {destacar_texto(row['review'], features_ia)}")
-                    st.metric("Score", f"{row['score']:.2f}")
+        msg_filtros = f"O utilizador EXIGE estas comodidades: {', '.join(filtros_ativos_nomes)}." if filtros_ativos_nomes else "O utilizador não escolheu filtros de comodidades."
+        msg_poi = f"O hotel deve ser perto de: {poi_ia}." if poi_ia else ""
+        msg_trip = f"Tipo de viagem: {tipo_viagem}." if tipo_viagem else ""
+        
+        prompt_rag = f"""
+        Tu és um Consultor de Viagens Especialista e muito persuasivo.
+        
+        O TEU OBJETIVO: Recomendar o melhor hotel da lista abaixo para o utilizador.
+        
+        DADOS DO PEDIDO:
+        - Pergunta original: "{pergunta}"
+        - {msg_filtros}
+        - {msg_poi}
+        - {msg_trip}
+
+        LISTA DE CANDIDATOS (Já filtrados pelo sistema):
+        {contexto_hoteis}
+
+        INSTRUÇÕES PARA A RESPOSTA:
+        1. Escolhe O MELHOR hotel desta lista.
+        2. Não dês apenas o nome. "Vende" o hotel! Escreve um texto fluido e cativante.
+        3. Menciona explicitamente as comodidades pedidas (ex: "O pequeno-almoço é fantástico porque...").
+        4. Usa detalhes das reviews fornecidas para justificar a escolha.
+        5. Responde sempre em Português de Portugal (PT-PT).
+        
+        Resposta:
+        """
+        
+        res_box = st.empty()
+        full_res = ""
+        try:
+            stream = ollama.chat(model='mistral', messages=[{'role': 'user', 'content': prompt_rag}], stream=True)
+            for chunk in stream:
+                full_res += chunk['message']['content']
+                res_box.info(full_res + "▌")
+            res_box.success(full_res)
+        except Exception:
+            res_box.warning("O Consultor IA está indisponível momentaneamente.")
+
+        st.divider()
+        for _, row in top.iterrows():
+            with st.expander(f"🏨 {row['Hotel_Name']} ({row['score']:.0%})", expanded=True):
+                st.caption(f"📍 {row['Hotel_Address']}")
+                
+                
+                encontrado_em = []
+                if check_breakfast:
+                    if "breakfast" in str(row['Tags_Clean']).lower(): encontrado_em.append("✅ Tag: Breakfast Included")
+                    elif "breakfast" in str(row['Positive_Review']).lower(): encontrado_em.append("✅ Review: Bom pequeno almoço")
+                
+                if check_pool:
+                     if "pool" in str(row['Tags_Clean']).lower() or "pool" in str(row['Positive_Review']).lower(): encontrado_em.append("✅ Piscina Confirmada")
+
+                if encontrado_em:
+                    st.success(" | ".join(encontrado_em))
+                
+               
+                termos_para_destaque = filtros_ativos_nomes + features_ia
+                st.markdown(f"> {destacar_texto(row['review'], termos_para_destaque)}")
+                st.metric("Score", f"{row['score']:.2f}")
